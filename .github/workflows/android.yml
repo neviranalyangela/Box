@@ -5,13 +5,18 @@
 # whisper.cpp, smollm) build here. ampere-2 (aarch64 host) cannot
 # build them — Hermes's local build is a sanity check only.
 #
-# 2026-11-17 fix: android-actions/setup-android@v3 was REMOVED — it fails
-# on ubuntu-latest because its bundled cmdline-tools 16.0 runs
-# `sdkmanager --licenses`, which prompts "Review licenses (y/N)?" on a
-# non-interactive runner and exits 1 (run 44010056209). The runner already
-# ships a full Android SDK (ANDROID_HOME set, cmdline-tools 20.0 in
-# latest), so the workflow only installs the missing pieces itself with
-# `yes | sdkmanager`.
+# History:
+# - run 44010056209: android-actions/setup-android@v3 FAILED — its bundled
+#   cmdline-tools 16.0 runs `sdkmanager --licenses`, which prompts (y/N)?
+#   on a non-interactive runner and exits 1. The action was dropped.
+# - run 44010529093: `yes | sdkmanager "platforms;android-37" ...` FAILED —
+#   "Failed to find package 'platforms;android-37'". The platform IS real
+#   (ampere-2 SDK has android-37, IsBaseSdk=true, PreviewSdkInt=0), so the
+#   runner's repository index just doesn't list it (stale cache). The
+#   ubuntu-latest image usually preinstalls the current platform, so the
+#   install step below is best-effort per package: install only what is
+#   missing, warn instead of failing — the Gradle build is the real gate
+#   and fails clearly if the platform is truly absent.
 name: Android CI
 
 on:
@@ -37,11 +42,20 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-      - name: Install NDK + platform 37
+      - name: Install NDK + platform 37 (best effort)
         run: |
           SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
-          yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" \
-            "platforms;android-37" "build-tools;37.0.0" "ndk;27.2.12479018"
+          MGR="$SDK/cmdline-tools/latest/bin/sdkmanager"
+          echo "Installed packages:"
+          "$MGR" --list_installed 2>/dev/null | grep -E "platforms;android-3|build-tools;3|ndk;" || true
+          for pkg in "platforms;android-37" "build-tools;37.0.0" "ndk;27.2.12479018"; do
+            if "$MGR" --list_installed 2>/dev/null | grep -qF "$pkg"; then
+              echo "$pkg already installed"
+            else
+              echo "Installing $pkg ..."
+              yes | "$MGR" "$pkg" || echo "WARNING: could not install $pkg (build will tell if it matters)"
+            fi
+          done
 
       - name: Build debug APK
         run: ./gradlew :app:assembleDebug --stacktrace --console=plain
