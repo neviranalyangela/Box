@@ -1,10 +1,17 @@
-# Draft CI workflow for the Box fork (neviranalyangela/Box).
-# To be pushed as .github/workflows/android.yml together with the
-# mix-android10 branch (workflow files need the PAT push — same as
-# litert-gallery). Upstream jegly/Box has NO CI at all, so this is new.
+# CI workflow for the Box fork (neviranalyangela/Box), pushed as
+# .github/workflows/android.yml on branch mix-android10.
+# Upstream jegly/Box has NO CI at all, so this is new.
 # Runners are x86_64 with a real NDK: the native libs (llama.cpp,
 # whisper.cpp, smollm) build here. ampere-2 (aarch64 host) cannot
 # build them — Hermes's local build is a sanity check only.
+#
+# 2026-11-17 fix: android-actions/setup-android@v3 was REMOVED — it fails
+# on ubuntu-latest because its bundled cmdline-tools 16.0 runs
+# `sdkmanager --licenses`, which prompts "Review licenses (y/N)?" on a
+# non-interactive runner and exits 1 (run 44010056209). The runner already
+# ships a full Android SDK (ANDROID_HOME set, cmdline-tools 20.0 in
+# latest), so the workflow only installs the missing pieces itself with
+# `yes | sdkmanager`.
 name: Android CI
 
 on:
@@ -30,11 +37,11 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install NDK
-        run: echo "y" | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;27.2.12479018"
+      - name: Install NDK + platform 37
+        run: |
+          SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" \
+            "platforms;android-37" "build-tools;37.0.0" "ndk;27.2.12479018"
 
       - name: Build debug APK
         run: ./gradlew :app:assembleDebug --stacktrace --console=plain
