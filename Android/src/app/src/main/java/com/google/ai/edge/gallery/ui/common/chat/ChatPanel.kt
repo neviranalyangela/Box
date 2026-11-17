@@ -21,14 +21,18 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.VisibilityThreshold
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -78,6 +82,8 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
@@ -91,9 +97,11 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.google.ai.edge.gallery.R
 import com.google.ai.edge.gallery.data.BuiltInTaskId
 import com.google.ai.edge.gallery.data.Model
+import com.google.ai.edge.gallery.data.RuntimeType
 import com.google.ai.edge.gallery.data.Task
 import com.google.ai.edge.gallery.ui.common.AudioAnimation
 import com.google.ai.edge.gallery.ui.common.ErrorDialog
@@ -103,6 +111,9 @@ import com.google.ai.edge.gallery.ui.modelmanager.ModelInitializationStatusType
 import com.google.ai.edge.gallery.ui.modelmanager.ModelManagerViewModel
 import com.google.ai.edge.gallery.ui.theme.customColors
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 /** Composable function for the main chat panel, displaying messages and handling user input. */
@@ -240,7 +251,63 @@ fun ChatPanel(
     showErrorDialog = modelInitializationStatus?.status == ModelInitializationStatusType.ERROR
   }
 
-  Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
+  //// Live inference metrics banner (ported from Gallery, Apache 2.0). ///////////////////////////
+  val isLiveMetricsSupported = selectedModel.runtimeType != RuntimeType.AICORE
+  val hasLiveMetrics by
+    remember(viewModel, selectedModel.name, isLiveMetricsSupported) {
+        if (isLiveMetricsSupported) {
+          viewModel.liveMetrics
+            .map { metrics ->
+              metrics != null &&
+                (metrics.metadata.modelName.isEmpty() ||
+                  metrics.metadata.modelName == selectedModel.name)
+            }
+            .distinctUntilChanged()
+        } else {
+          flowOf(false)
+        }
+      }
+      .collectAsStateWithLifecycle(initialValue = false)
+  val showLiveMetrics = uiState.showLiveMetrics
+  // The live metrics toggle button is interactive only when metrics are available for the
+  // initialized model and no inference turn or session reset is active.
+  val isLiveMetricsToggleEnabled =
+    hasLiveMetrics &&
+      modelInitializationStatus?.status == ModelInitializationStatusType.INITIALIZED &&
+      !uiState.isResettingSession &&
+      !uiState.inProgress
+
+  LaunchedEffect(viewModel, task.id, selectedModel) {
+    viewModel.loadLiveMetricsVisibility(task.id)
+    viewModel.observeLiveMetrics(selectedModel)
+  }
+  LaunchedEffect(isLiveMetricsToggleEnabled, task.id) {
+    if (isLiveMetricsToggleEnabled) {
+      viewModel.maybeShowLiveMetricsPrompt(task.id)
+    }
+  }
+
+  // Dismiss the one-time discovery pill on any user touch or scroll completion across the screen
+  // without consuming the event (so tapping the pill itself still toggles live metrics).
+  val dismissPromptModifier =
+    if (uiState.showLiveMetricsPrompt && isLiveMetricsToggleEnabled) {
+      Modifier.pointerInput(viewModel) {
+        awaitEachGesture {
+          awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Final)
+          do {
+            val event = awaitPointerEvent(PointerEventPass.Final)
+          } while (event.changes.any { it.pressed })
+          viewModel.dismissLiveMetricsPrompt()
+        }
+      }
+    } else {
+      Modifier
+    }
+
+  Box(
+    modifier = Modifier.fillMaxSize().then(dismissPromptModifier),
+    contentAlignment = Alignment.BottomCenter,
+  ) {
     // Audio record animation.
     AnimatedVisibility(
       showAudioRecorder,
@@ -555,6 +622,21 @@ fun ChatPanel(
 
       aboveInputComposable(selectedModel)
 
+      // Live inference metrics banner above the chat input (ported from Gallery, Apache 2.0).
+      if (hasLiveMetrics) {
+        AnimatedVisibility(
+          visible = showLiveMetrics,
+          enter = fadeIn() + expandVertically(),
+          exit = fadeOut() + shrinkVertically(),
+        ) {
+          LiveMetricsBar(
+            liveMetricsFlow = viewModel.liveMetrics,
+            modelName = selectedModel.name,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+          )
+        }
+      }
+
       MessageInputText(
         task = task,
         modelManagerViewModel = modelManagerViewModel,
@@ -569,6 +651,7 @@ fun ChatPanel(
         textFieldPlaceHolderRes = task.textInputPlaceHolderRes,
         onValueChanged = { curMessage = it },
         onSendMessage = {
+          viewModel.dismissLiveMetricsPrompt()
           onSendMessage(selectedModel, it)
           curMessage = ""
           // Hide software keyboard.
@@ -603,6 +686,13 @@ fun ChatPanel(
         showDocumentPicker = task.id == BuiltInTaskId.LLM_CHAT,
         showStopButtonWhenInProgress = showStopButtonInInputWhenInProgress,
         onImageLimitExceeded = { showImageLimitBanner = true },
+        showLiveMetricsToggle = hasLiveMetrics,
+        isLiveMetricsVisible = showLiveMetrics,
+        showLiveMetricsPrompt = uiState.showLiveMetricsPrompt,
+        onDismissLiveMetricsPrompt = viewModel::dismissLiveMetricsPrompt,
+        onToggleLiveMetrics = {
+          viewModel.toggleLiveMetrics(taskId = task.id, model = selectedModel)
+        },
       )
     }
   }

@@ -19,6 +19,7 @@ package com.google.ai.edge.gallery.data
 import android.content.Context
 import com.google.gson.annotations.SerializedName
 import java.io.File
+import kotlin.time.Duration
 
 data class ModelDataFile(
   val name: String,
@@ -272,6 +273,8 @@ data class Model(
   var prevConfigValues: Map<String, Any> = mapOf(),
   var totalBytes: Long = 0L,
   var accessToken: String? = null,
+  // Box: model init duration measured by the runtime helper, for the live metrics banner.
+  var initDuration: Duration? = null,
 ) {
   init {
     normalizedName = NORMALIZE_NAME_REGEX.replace(name, "_")
@@ -374,3 +377,17 @@ data class ModelDownloadStatus(
 
 val EMPTY_MODEL: Model =
   Model(name = "empty", downloadFileName = "empty.tflite", url = "", sizeInBytes = 0L)
+
+// Box seams for the ported Gallery live metrics tracker (common/metrics). Gallery defines both
+// as Model members; Box's Model predates them, so they live here as extensions.
+
+/** Whether this model runs on the LiteRT-LM runtime and supports engine benchmark telemetry. */
+val Model.supportModelBenchmark: Boolean
+  get() = isLlm && runtimeType != RuntimeType.AICORE
+
+/** The accelerator currently configured for this model, or null when not explicitly set. */
+val Model.currentAccelerator: Accelerator?
+  get() =
+    Accelerator.entries.firstOrNull {
+      it.label.equals(getStringConfigValue(ConfigKeys.ACCELERATOR, "").trim(), ignoreCase = true)
+    }

@@ -20,6 +20,9 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.util.Log
 import com.google.ai.edge.gallery.common.cleanUpMediapipeTaskErrorMessage
+import com.google.ai.edge.gallery.common.metrics.InferenceStatus
+import com.google.ai.edge.gallery.common.metrics.MetricsTracker
+import com.google.ai.edge.gallery.common.metrics.asSession
 import com.google.ai.edge.gallery.data.Accelerator
 import com.google.ai.edge.gallery.data.ConfigKeys
 import com.google.ai.edge.gallery.data.DEFAULT_MAX_TOKEN
@@ -46,15 +49,27 @@ import com.google.ai.edge.litertlm.SamplerConfig
 import com.google.ai.edge.litertlm.ToolProvider
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.CancellationException
+import kotlin.time.TimeSource
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 
 private const val TAG = "AGLlmChatModelHelper"
 
-data class LlmModelInstance(val engine: Engine, var conversation: Conversation)
+data class LlmModelInstance(
+  val engine: Engine,
+  var conversation: Conversation,
+  // Live metrics banner (ported from Gallery): per-session telemetry tracker, null only for
+  // models that don't support benchmark telemetry.
+  val metricsTracker: MetricsTracker? = null,
+)
 
 object LlmChatModelHelper : LlmModelHelper {
   // Indexed by model name.
   private val cleanUpListeners: MutableMap<String, CleanUpListener> = mutableMapOf()
+
+  @Suppress("GlobalCoroutineDispatchers", "AndroidLintDispatcherUsage")
+  internal var ioDispatcher: CoroutineDispatcher = Dispatchers.IO
 
   @OptIn(ExperimentalApi::class) // opt-in experimental flags
   override fun initialize(
@@ -116,10 +131,29 @@ object LlmChatModelHelper : LlmModelHelper {
           else null,
       )
 
+    val initStartMark = TimeSource.Monotonic.markNow()
+    // shortcut: Box's initialize() has no taskId param (Gallery threads task.id through); the id
+    // only feeds analytics metadata (Firebase is disabled in Box builds). Upgrade the
+    // LlmModelHelper interface if per-task telemetry is ever needed.
+    val metricsTracker =
+      MetricsTracker.create(
+        context = context,
+        model = model,
+        taskId = "",
+        ioDispatcher = ioDispatcher,
+      )
+
     // Create an instance of LiteRT LM engine and conversation.
     try {
+      // The live metrics banner reads engine benchmark stats (prefill count/speed) via
+      // Conversation.getBenchmarkInfo(), which requires benchmark mode during engine init.
+      ExperimentalFlags.enableBenchmark = true
       val engine = Engine(engineConfig)
-      engine.initialize()
+      try {
+        engine.initialize()
+      } finally {
+        ExperimentalFlags.enableBenchmark = false
+      }
 
       ExperimentalFlags.enableConversationConstrainedDecoding =
         enableConversationConstrainedDecoding
@@ -141,11 +175,20 @@ object LlmChatModelHelper : LlmModelHelper {
           )
         )
       ExperimentalFlags.enableConversationConstrainedDecoding = false
-      model.instance = LlmModelInstance(engine = engine, conversation = conversation)
+      model.instance =
+        LlmModelInstance(
+          engine = engine,
+          conversation = conversation,
+          metricsTracker = metricsTracker,
+        )
     } catch (e: Exception) {
+      model.initDuration = initStartMark.elapsedNow()
+      metricsTracker.onModelInitialized()
       onDone(cleanUpMediapipeTaskErrorMessage(e.message ?: "Unknown error"))
       return
     }
+    model.initDuration = initStartMark.elapsedNow()
+    metricsTracker.onModelInitialized()
     onDone("")
   }
 
@@ -199,6 +242,10 @@ object LlmChatModelHelper : LlmModelHelper {
         )
       ExperimentalFlags.enableConversationConstrainedDecoding = false
       instance.conversation = newConversation
+      // The replacement conversation starts on an empty KV cache, so per-session token accounting
+      // and sensor histories are rewound to match. This also clears a turn left active by closing
+      // the old conversation mid-flight.
+      instance.metricsTracker?.resetSession()
 
       Log.d(TAG, "Resetting done")
     } catch (e: Exception) {
@@ -225,6 +272,9 @@ object LlmChatModelHelper : LlmModelHelper {
       Log.e(TAG, "Failed to close the engine: ${e.message}")
     }
 
+    instance.metricsTracker?.resetSession()
+    instance.metricsTracker?.close()
+
     val onCleanUp = cleanUpListeners.remove(model.name)
     if (onCleanUp != null) {
       onCleanUp()
@@ -237,7 +287,15 @@ object LlmChatModelHelper : LlmModelHelper {
 
   override fun stopResponse(model: Model) {
     val instance = model.instance as? LlmModelInstance ?: return
-    instance.conversation.cancelProcess()
+    try {
+      // Signal the native engine to cancel first. The engine's worker thread finalizes its
+      // benchmark stats and then invokes MessageCallback.onError(CancellationException), which
+      // calls metricsTracker.cancelTurn() when engine benchmark and token counts are ready.
+      instance.conversation.cancelProcess()
+    } catch (e: Exception) {
+      Log.w(TAG, "Failed to cancel conversation process", e)
+      val unused = instance.metricsTracker?.cancelTurn()
+    }
   }
 
   override fun runInference(
@@ -276,29 +334,61 @@ object LlmChatModelHelper : LlmModelHelper {
       contents.add(Content.Text(input))
     }
 
-    conversation.sendMessageAsync(
-      Contents.of(contents),
-      object : MessageCallback {
-        override fun onMessage(message: Message) {
-          resultListener(message.toString(), false, message.channels["thought"])
-        }
-
-        override fun onDone() {
-          resultListener("", true, null)
-        }
-
-        override fun onError(throwable: Throwable) {
-          if (throwable is CancellationException) {
-            Log.i(TAG, "The inference is cancelled.")
-            resultListener("", true, null)
-          } else {
-            Log.e(TAG, "onError", throwable)
-            onError("Error: ${throwable.message}")
+    // Step 1: Start the turn before processing the input, so its latency includes the input
+    // processing the user waits for.
+    instance.metricsTracker?.startTurn(conversation.asSession())
+    try {
+      conversation.sendMessageAsync(
+        Contents.of(contents),
+        object : MessageCallback {
+          override fun onMessage(message: Message) {
+            val text = message.toString()
+            val thinking = message.channels["thought"]
+            // Record streaming token to lock TTFT on first token and update live metrics.
+            instance.metricsTracker?.onNewToken(tokenText = text, thinkingText = thinking)
+            resultListener(text, false, thinking)
           }
-        }
-      },
-      extraContext ?: emptyMap(),
-    )
+
+          override fun onDone() {
+            // Finalize turn metrics with SUCCESS status.
+            val unused =
+              instance.metricsTracker?.endTurn(
+                statusCode = InferenceStatus.Code.SUCCESS,
+                errorMessage = null,
+              )
+            resultListener("", true, null)
+          }
+
+          override fun onError(throwable: Throwable) {
+            if (throwable is CancellationException) {
+              // Native cancellation via cancelProcess() completed on the worker thread; finalize
+              // cancelled-turn metrics now that engine benchmark and token counts are ready.
+              Log.i(TAG, "The inference is cancelled.")
+              val unused = instance.metricsTracker?.cancelTurn()
+              resultListener("", true, null)
+            } else {
+              // Engine error or crash: record ERROR status with error message.
+              Log.e(TAG, "onError", throwable)
+              val unused =
+                instance.metricsTracker?.endTurn(
+                  statusCode = InferenceStatus.Code.ERROR,
+                  errorMessage = throwable.message ?: "Unknown error",
+                )
+              onError("Error: ${throwable.message}")
+            }
+          }
+        },
+        extraContext ?: emptyMap(),
+      )
+    } catch (e: Exception) {
+      // No engine callback follows a failure before the message is sent, so end the turn here.
+      val unused =
+        instance.metricsTracker?.endTurn(
+          statusCode = InferenceStatus.Code.ERROR,
+          errorMessage = e.message ?: "Unknown error",
+        )
+      throw e
+    }
   }
 
   private fun Bitmap.toPngByteArray(): ByteArray {

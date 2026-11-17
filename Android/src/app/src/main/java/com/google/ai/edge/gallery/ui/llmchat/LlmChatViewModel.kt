@@ -20,7 +20,10 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.util.Log
 import androidx.lifecycle.viewModelScope
+import com.google.ai.edge.gallery.common.metrics.InferenceMetrics
+import com.google.ai.edge.gallery.common.metrics.MetricsTracker
 import com.google.ai.edge.gallery.data.ConfigKeys
+import com.google.ai.edge.gallery.data.DataStoreRepository
 import com.google.ai.edge.gallery.data.Model
 import com.google.ai.edge.gallery.data.Task
 import com.google.ai.edge.gallery.data.local.ChatRepository
@@ -45,7 +48,9 @@ import com.google.ai.edge.litertlm.ToolProvider
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -57,6 +62,62 @@ open class LlmChatViewModelBase() : ChatViewModel() {
 
   // Box: Chat persistence — will be injected by Hilt in concrete subclasses
   override lateinit var chatRepository: ChatRepository
+
+  // Box: DataStore for the live metrics banner visibility — injected by Hilt in subclasses.
+  override var dataStoreRepository: DataStoreRepository? = null
+
+  //// Live inference metrics banner (ported from Gallery, Apache 2.0). ///////////////////////////
+
+  private val _liveMetrics = MutableStateFlow<InferenceMetrics?>(null)
+  override val liveMetrics: StateFlow<InferenceMetrics?> = _liveMetrics.asStateFlow()
+  private var liveMetricsJob: Job? = null
+  private var observedLiveMetricsModel: Model? = null
+
+  private fun Model.llmMetricsTracker(): MetricsTracker? =
+    (instance as? LlmModelInstance)?.metricsTracker
+
+  /**
+   * Reactively observes the live [InferenceMetrics] stream of [model] across its initialization and
+   * session lifecycle, updating [liveMetrics] as snapshots are emitted.
+   */
+  override fun observeLiveMetrics(model: Model) {
+    if (observedLiveMetricsModel === model && liveMetricsJob?.isActive == true) {
+      if (currentTaskId.isNotEmpty()) {
+        syncLiveMetricsVisibility(model = model, enabled = uiState.value.showLiveMetrics)
+      }
+      return
+    }
+    observedLiveMetricsModel = model
+    liveMetricsJob?.cancel()
+    _liveMetrics.value = null
+    liveMetricsJob = viewModelScope.launch {
+      // Box seam: Gallery's Model exposes initStatusFlow and reattaches to the tracker reactively;
+      // Box's Model only has `instance`, so poll for (re)initialization and collect while stable.
+      var observedTracker: MetricsTracker? = null
+      var collectorJob: Job? = null
+      while (isActive) {
+        val tracker = model.llmMetricsTracker()
+        if (tracker !== observedTracker) {
+          observedTracker = tracker
+          collectorJob?.cancel()
+          _liveMetrics.value = null
+          if (tracker != null) {
+            if (currentTaskId.isNotEmpty()) {
+              tracker.updateLiveMetrics(enabled = uiState.value.showLiveMetrics)
+            }
+            collectorJob = launch { tracker.liveMetrics.collect { _liveMetrics.value = it } }
+          }
+        }
+        delay(200)
+      }
+    }
+  }
+
+  override fun syncLiveMetricsVisibility(model: Model?, enabled: Boolean) {
+    val targetModel = model ?: observedLiveMetricsModel ?: return
+    targetModel.llmMetricsTracker()?.updateLiveMetrics(enabled = enabled)
+  }
+
   private var currentConversationId: String? = null
   private val conversationMutex = Mutex()
 
@@ -516,19 +577,31 @@ open class LlmChatViewModelBase() : ChatViewModel() {
 }
 
 @HiltViewModel class LlmChatViewModel @Inject constructor(
-  repo: ChatRepository
+  repo: ChatRepository,
+  dsRepo: DataStoreRepository,
 ) : LlmChatViewModelBase() {
-  init { chatRepository = repo }
+  init {
+    chatRepository = repo
+    dataStoreRepository = dsRepo
+  }
 }
 
 @HiltViewModel class LlmAskImageViewModel @Inject constructor(
-  repo: ChatRepository
+  repo: ChatRepository,
+  dsRepo: DataStoreRepository,
 ) : LlmChatViewModelBase() {
-  init { chatRepository = repo }
+  init {
+    chatRepository = repo
+    dataStoreRepository = dsRepo
+  }
 }
 
 @HiltViewModel class LlmAskAudioViewModel @Inject constructor(
-  repo: ChatRepository
+  repo: ChatRepository,
+  dsRepo: DataStoreRepository,
 ) : LlmChatViewModelBase() {
-  init { chatRepository = repo }
+  init {
+    chatRepository = repo
+    dataStoreRepository = dsRepo
+  }
 }

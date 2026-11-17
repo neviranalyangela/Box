@@ -44,6 +44,8 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.lifecycle.awaitInstance
 import androidx.camera.view.PreviewView
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -62,12 +64,14 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.InsertChart
 import androidx.compose.material.icons.rounded.AudioFile
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.FlipCameraAndroid
@@ -86,6 +90,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedIconButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
@@ -179,6 +184,12 @@ fun MessageInputText(
   showStopButtonWhenInProgress: Boolean = false,
   onImageLimitExceeded: () -> Unit = {},
   showDocumentPicker: Boolean = false,
+  // Live inference metrics banner toggle (ported from Gallery, Apache 2.0).
+  showLiveMetricsToggle: Boolean = false,
+  isLiveMetricsVisible: Boolean = false,
+  showLiveMetricsPrompt: Boolean = false,
+  onDismissLiveMetricsPrompt: () -> Unit = {},
+  onToggleLiveMetrics: () -> Unit = {},
 ) {
   val context = LocalContext.current
   val lifecycleOwner = LocalLifecycleOwner.current
@@ -446,6 +457,11 @@ fun MessageInputText(
               }
 
               // Second row: buttons to add extra content, and the action button.
+              val enableLiveMetricsToggle = !inProgress && !isResettingSession && !modelInitializing
+              val showPromptLabel =
+                showLiveMetricsToggle && showLiveMetricsPrompt && enableLiveMetricsToggle
+              // Box seam: Gallery also auto-scrolls its horizontally scrollable toolbar to reveal
+              // the expanding prompt pill; Box's toolbar is not scrollable, so no scroll logic.
               Row(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp).offset(y = (-8).dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -697,6 +713,19 @@ fun MessageInputText(
                     ) {
                       Text(stringResource(R.string.skills))
                     }
+                  }
+
+                  // Live metrics toggle.
+                  if (showLiveMetricsToggle) {
+                    LiveMetricsToggleButton(
+                      checked = isLiveMetricsVisible,
+                      enabled = enableLiveMetricsToggle,
+                      showPromptLabel = showPromptLabel,
+                      onToggle = {
+                        onDismissLiveMetricsPrompt()
+                        onToggleLiveMetrics()
+                      },
+                    )
                   }
                 }
 
@@ -1226,4 +1255,67 @@ private class SensorObserver(context: Context) : DefaultLifecycleObserver, Senso
   }
 
   override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+}
+
+// Ported verbatim from Gallery (Apache 2.0) ui/common/chat/MessageInputText.kt.
+@Composable
+private fun LiveMetricsToggleButton(
+  checked: Boolean,
+  enabled: Boolean,
+  showPromptLabel: Boolean,
+  onToggle: () -> Unit,
+) {
+  val containerColor =
+    when {
+      !enabled -> MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.5f)
+      checked -> MaterialTheme.colorScheme.secondaryContainer
+      else -> MaterialTheme.colorScheme.surfaceContainerHigh
+    }
+  val contentColor =
+    when {
+      !enabled -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f)
+      checked -> MaterialTheme.colorScheme.onSecondaryContainer
+      else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+  val startPadding by
+    animateDpAsState(
+      targetValue = if (showPromptLabel) 11.dp else 10.dp,
+      label = "liveMetricsStartPadding",
+    )
+  val endPadding by
+    animateDpAsState(
+      targetValue = if (showPromptLabel) 14.dp else 10.dp,
+      label = "liveMetricsEndPadding",
+    )
+
+  // Uses the toggleable Surface overload so the 40dp circle can expand to hold the one-time
+  // discovery prompt label while preserving TalkBack on/off toggle semantics.
+  Surface(
+    checked = checked,
+    onCheckedChange = { onToggle() },
+    enabled = enabled,
+    shape = CircleShape,
+    color = containerColor,
+    contentColor = contentColor,
+    modifier = Modifier.height(40.dp).widthIn(min = 40.dp),
+  ) {
+    Row(
+      modifier = Modifier.padding(start = startPadding, end = endPadding),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+      Icon(
+        Icons.Outlined.InsertChart,
+        contentDescription = stringResource(R.string.cd_toggle_live_metrics),
+        modifier = Modifier.size(20.dp),
+      )
+      AnimatedVisibility(visible = showPromptLabel) {
+        Text(
+          text = stringResource(R.string.live_metrics_toggle_prompt),
+          style = MaterialTheme.typography.labelMedium,
+          maxLines = 1,
+        )
+      }
+    }
+  }
 }

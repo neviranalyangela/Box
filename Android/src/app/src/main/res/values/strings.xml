@@ -416,4 +416,39 @@ Any use of an Agent Skill is subject to the applicable terms for that Skill.</st
   <!-- Content description spoken when the "menu" icon is focused. [CHAR_LIMIT=NONE] -->
   <string name="cd_menu">Menu</string>
 
+  <!-- Live metrics banner strings ported from Gallery (Apache 2.0). The context threshold tick
+       is a pressure indicator only in Box (no context compaction), so the Gallery "compress"
+       wording is intentionally neutralized. -->
+  <string name="cd_toggle_live_metrics">Toggle live metrics</string>
+  <string name="live_metrics_speed">Speed</string>
+  <string name="live_metrics_speed_decode_annotation">decode</string>
+  <string name="live_metrics_tokens">Tokens</string>
+  <string name="live_metrics_ram">RAM</string>
+  <string name="live_metrics_context">Context</string>
+  <string name="live_metrics_context_compress_mark">%1$d%%</string>
+  <string name="live_metrics_prefilling">Prefilling\u2026</string>
+  <string name="live_metrics_generating">Generating\u2026</string>
+  <string name="live_metrics_init_seconds_format">Init: %1$.1fs</string>
+  <string name="live_metrics_init_ms_format">Init: %1$d ms</string>
+  <string name="live_metrics_ttft_format">TTFT: %1$d ms</string>
+  <string name="live_metrics_prefill_speed_format">Prefill: %1$.1f tok/s</string>
+  <string name="live_metrics_decode_speed_format">%1$.1f tok/s</string>
+  <string name="live_metrics_speed_empty">-- tok/s</string>
+  <string name="live_metrics_tokens_io_format">%1$d in / %2$d out</string>
+  <string name="live_metrics_tokens_gen_format">%1$d gen</string>
+  <string name="live_metrics_tokens_total_format">%1$d total</string>
+  <string name="live_metrics_tokens_empty">-- gen</string>
+  <string name="live_metrics_ram_mb_format">%1$,.0f MB</string>
+  <string name="live_metrics_ram_gb_format">%1$.2f GB</string>
+  <string name="live_metrics_ram_empty">-- MB</string>
+  <string name="live_metrics_ram_percent_format">%1$.0f%% RAM</string>
+  <string name="live_metrics_power_w_format">%1$.2f W</string>
+  <string name="live_metrics_power_mw_format">%1$.0f mW</string>
+  <string name="live_metrics_context_usage_format">%1$d / %2$d (%3$.0f%%)</string>
+  <string name="live_metrics_context_usage_empty_format">-- / %1$d</string>
+  <string name="cd_live_metrics_info">About live metrics</string>
+  <string name="live_metrics_info_tooltip">Live stats for response speed, token usage, memory, and context space.\nRAM: Peak total app memory (%% of device RAM)\nContext: marker at %1$d%% usage</string>
+  <string name="live_metrics_compressing_context">Compressing context\u2026</string>
+  <string name="live_metrics_toggle_prompt">Try live metrics!</string>
+
 </resources>

@@ -78,6 +78,10 @@ message Settings {
   // copybara:strip_end
 
   repeated string viewed_promo_id = 10;
+
+  // Per-task visibility of the live inference metrics banner (ported from Gallery settings.proto,
+  // where it is field 16; 11 is the next free number in Box).
+  map<string, bool> show_live_metrics_by_task = 11;
 }
 
 message UserData {

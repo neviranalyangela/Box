@@ -103,6 +103,7 @@ dependencies {
   implementation(libs.openid.appauth)
   implementation(libs.androidx.splashscreen)
   implementation(libs.protobuf.javalite)
+  implementation(libs.protobuf.kotlin.lite)
   implementation(libs.hilt.android)
   implementation(libs.hilt.navigation.compose)
   implementation(libs.play.services.oss.licenses)
@@ -148,7 +149,15 @@ dependencies {
 
 protobuf {
   protoc { artifact = "com.google.protobuf:protoc:4.36.2" }
-  generateProtoTasks { all().forEach { it.plugins { create("java") { option("lite") } } } }
+  generateProtoTasks {
+    all().forEach {
+      it.plugins {
+        create("java") { option("lite") }
+        // Kotlin DSL builders (e.g. inferenceMetrics {}) used by the ported Gallery metrics code.
+        create("kotlin") { option("lite") }
+      }
+    }
+  }
 }
 
 // OSS Licenses plugin uses groovy.util.XmlSlurper which was moved to groovy-xml in Groovy 4.x

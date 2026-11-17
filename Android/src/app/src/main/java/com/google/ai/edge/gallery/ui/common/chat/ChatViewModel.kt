@@ -19,12 +19,17 @@ package com.google.ai.edge.gallery.ui.common.chat
 import android.util.Log
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import com.google.ai.edge.gallery.common.metrics.InferenceMetrics
 import com.google.ai.edge.gallery.common.processLlmResponse
 import com.google.ai.edge.gallery.data.ConfigKeys
+import com.google.ai.edge.gallery.data.DataStoreRepository
 import com.google.ai.edge.gallery.data.Model
 import com.google.ai.edge.gallery.data.local.ChatRepository
 import com.google.ai.edge.gallery.ui.common.chat.ChatSide
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 
@@ -47,6 +52,15 @@ data class ChatUiState(
 
   /** A map of model names to the currently streaming chat message. */
   val streamingMessagesByModel: Map<String, ChatMessage> = mapOf(),
+
+  /** Whether the live inference metrics banner is visible for the current task. */
+  val showLiveMetrics: Boolean = false,
+
+  /**
+   * Whether the one-time expandable discovery pill label prompting the user to try live inference
+   * metrics is currently shown on the toggle button.
+   */
+  val showLiveMetricsPrompt: Boolean = false,
 )
 
 /** ViewModel responsible for managing the chat UI state and handling chat-related operations. */
@@ -56,6 +70,80 @@ abstract class ChatViewModel : ViewModel() {
   
   // Subclasses should override this to provide the repository
   protected abstract val chatRepository: ChatRepository
+
+  //// Live inference metrics banner (ported from Gallery, Apache 2.0). ///////////////////////////
+
+  /** Optional [DataStoreRepository] for reading and persisting task-level banner visibility. */
+  open val dataStoreRepository: DataStoreRepository? = null
+
+  /** The current task ID for the session. */
+  protected var currentTaskId: String = ""
+
+  /** Real-time inference metrics stream for the currently observed model. */
+  open val liveMetrics: StateFlow<InferenceMetrics?> =
+    MutableStateFlow<InferenceMetrics?>(null).asStateFlow()
+
+  /**
+   * Attaches [liveMetrics] observation to the given [model] across its initialization lifecycle.
+   */
+  open fun observeLiveMetrics(model: Model) {}
+
+  /**
+   * Synchronizes the current live metrics visibility toggle state to the active model's metrics
+   * tracker.
+   */
+  protected open fun syncLiveMetricsVisibility(model: Model?, enabled: Boolean) {}
+
+  internal val liveMetricsVisibilityManager by lazy {
+    LiveMetricsVisibilityManager(
+      uiState = _uiState,
+      dataStoreRepository = dataStoreRepository,
+      scope = viewModelScope,
+      ioDispatcher = Dispatchers.IO,
+      onSyncVisibility = ::syncLiveMetricsVisibility,
+    )
+  }
+
+  /**
+   * Loads the persisted live metrics visibility setting for [taskId] into the UI state and
+   * synchronizes the active metrics tracker.
+   *
+   * @param taskId The identifier of the task whose setting should be loaded.
+   */
+  suspend fun loadLiveMetricsVisibility(taskId: String) {
+    if (taskId.isNotEmpty()) {
+      currentTaskId = taskId
+    }
+    liveMetricsVisibilityManager.loadVisibility(taskId)
+  }
+
+  /**
+   * Toggles the visibility of the live inference metrics banner for [taskId], persists the
+   * preference, updates the active metrics tracker, and logs the action to Firebase Analytics.
+   */
+  fun toggleLiveMetrics(taskId: String, model: Model) {
+    if (taskId.isNotEmpty()) {
+      currentTaskId = taskId
+    }
+    liveMetricsVisibilityManager.toggle(taskId, model)
+  }
+
+  /**
+   * Shows the once-per-task expandable discovery pill label on the live metrics toggle button if
+   * the user has not viewed it for [taskId] before and the live metrics banner is currently
+   * collapsed.
+   */
+  suspend fun maybeShowLiveMetricsPrompt(taskId: String) {
+    if (taskId.isNotEmpty()) {
+      currentTaskId = taskId
+    }
+    liveMetricsVisibilityManager.maybeShowPrompt(taskId)
+  }
+
+  /** Dismisses the live metrics discovery pill prompt if currently visible. */
+  fun dismissLiveMetricsPrompt() {
+    liveMetricsVisibilityManager.dismissPrompt()
+  }
 
   fun addMessage(model: Model, message: ChatMessage) {
     val newMessagesByModel = _uiState.value.messagesByModel.toMutableMap()

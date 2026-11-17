@@ -109,6 +109,12 @@ interface DataStoreRepository {
 
   /** Returns whether a promo with the specified ID has been viewed. */
   fun hasViewedPromo(promoId: String): Boolean
+
+  /** Saves whether the live inference metrics banner is visible for the specified [taskId]. */
+  fun saveShowLiveMetrics(taskId: String, visible: Boolean)
+
+  /** Returns whether the live inference metrics banner is visible for the specified [taskId]. */
+  fun readShowLiveMetrics(taskId: String): Boolean
 }
 
 /** Repository for managing data using Proto DataStore. */
@@ -431,6 +437,21 @@ class DefaultDataStoreRepository(
     return runBlocking {
       val settings = dataStore.data.first()
       settings.viewedPromoIdList.contains(promoId)
+    }
+  }
+
+  override fun saveShowLiveMetrics(taskId: String, visible: Boolean) {
+    runBlocking {
+      dataStore.updateData { settings ->
+        settings.toBuilder().putShowLiveMetricsByTask(taskId, visible).build()
+      }
+    }
+  }
+
+  override fun readShowLiveMetrics(taskId: String): Boolean {
+    return runBlocking {
+      val settings = dataStore.data.first()
+      settings.showLiveMetricsByTaskMap[taskId] ?: false
     }
   }
 }

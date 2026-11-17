@@ -22,6 +22,7 @@ import android.graphics.BitmapFactory
 import android.graphics.Matrix
 import android.net.Uri
 import android.os.Build
+import android.os.Bundle
 import android.util.Log
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.ime
@@ -36,7 +37,10 @@ import androidx.compose.ui.focus.onFocusEvent
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.exifinterface.media.ExifInterface
+import com.google.ai.edge.gallery.ButtonClickAction
+import com.google.ai.edge.gallery.GalleryEvent
 import com.google.ai.edge.gallery.data.SAMPLE_RATE
+import com.google.ai.edge.gallery.firebaseAnalytics
 import com.google.gson.Gson
 import java.io.File
 import java.io.FileInputStream
@@ -377,4 +381,29 @@ fun isAICoreSupported(allowedDeviceModels: Set<String>?): Boolean {
   if (allowedDeviceModels.isNullOrEmpty()) return false
   val currentModel = Build.MODEL?.lowercase() ?: return false
   return allowedDeviceModels.contains(currentModel)
+}
+
+/**
+ * Logs a [GalleryEvent.BUTTON_CLICKED] analytics event. Ported from Gallery (Apache 2.0) for the
+ * live metrics banner toggle; a no-op when Firebase Analytics is unavailable (Box default).
+ */
+fun logButtonClick(
+  eventType: String,
+  buttonId: String? = null,
+  action: ButtonClickAction? = null,
+  capabilityName: String? = null,
+  modelId: String? = null,
+  extras: Bundle.() -> Unit = {},
+) {
+  firebaseAnalytics?.logEvent(
+    GalleryEvent.BUTTON_CLICKED.id,
+    Bundle().apply {
+      extras()
+      putString("event_type", eventType)
+      buttonId?.let { putString("button_id", it) }
+      action?.let { putString("action", it.id) }
+      capabilityName?.let { putString("capability_name", it) }
+      modelId?.let { putString("model_id", it) }
+    },
+  )
 }
