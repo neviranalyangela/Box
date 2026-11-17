@@ -326,10 +326,11 @@ fun GalleryTheme(content: @Composable () -> Unit) {
 
   StatusBarColorController(useDarkTheme = darkTheme)
 
-  // Box: Use Material 3 You dynamic colors extracted from wallpaper.
-  // minSdk 35 guarantees dynamic color is always available.
+  // Box: Use Material 3 You dynamic colors extracted from wallpaper (API 31+).
+  // Below S, fall back to the static schemes.
   val context = view.context
   val colorScheme = when {
+    Build.VERSION.SDK_INT < Build.VERSION_CODES.S -> if (darkTheme) darkScheme else lightScheme
     darkTheme -> androidx.compose.material3.dynamicDarkColorScheme(context)
     else -> androidx.compose.material3.dynamicLightColorScheme(context)
   }

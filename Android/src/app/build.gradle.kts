@@ -30,11 +30,11 @@ plugins {
 
 android {
   namespace = "com.google.ai.edge.gallery"
-  compileSdk = 36
+  compileSdk = 37
 
   defaultConfig {
     applicationId = "com.box.gallery"
-    minSdk = 35
+    minSdk = 29
     targetSdk = 37
     versionCode = 26
     versionName = "1.0.12"
@@ -59,13 +59,15 @@ android {
     sourceCompatibility = JavaVersion.VERSION_11
     targetCompatibility = JavaVersion.VERSION_11
   }
-  kotlinOptions {
-    jvmTarget = "11"
-    freeCompilerArgs += "-Xcontext-receivers"
-  }
   buildFeatures {
     compose = true
     buildConfig = true
+  }
+}
+
+kotlin {
+  compilerOptions {
+    jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_11)
   }
 }
 

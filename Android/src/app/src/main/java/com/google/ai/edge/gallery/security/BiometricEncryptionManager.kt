@@ -1,6 +1,7 @@
 package com.google.ai.edge.gallery.security
 
 import android.content.Context
+import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyInfo
 import android.security.keystore.KeyProperties
@@ -88,10 +89,16 @@ object BiometricEncryptionManager {
             val key = keyStore.getKey(KEY_ALIAS, null) as? SecretKey ?: return "None"
             val factory = SecretKeyFactory.getInstance(key.algorithm, KEYSTORE_PROVIDER)
             val keyInfo = factory.getKeySpec(key, KeyInfo::class.java) as KeyInfo
-            when (keyInfo.securityLevel) {
-                KeyProperties.SECURITY_LEVEL_STRONGBOX -> "StrongBox"
-                KeyProperties.SECURITY_LEVEL_TRUSTED_ENVIRONMENT -> "TEE"
-                else -> "Software"
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                when (keyInfo.securityLevel) {
+                    KeyProperties.SECURITY_LEVEL_STRONGBOX -> "StrongBox"
+                    KeyProperties.SECURITY_LEVEL_TRUSTED_ENVIRONMENT -> "TEE"
+                    else -> "Software"
+                }
+            } else if (keyInfo.isInsideSecureHardware) {
+                "TEE"
+            } else {
+                "Software"
             }
         } catch (_: Exception) {
             "Unknown"

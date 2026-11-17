@@ -19,7 +19,7 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-sdk
-        android:minSdkVersion="35"
+        android:minSdkVersion="29"
         android:compileSdkVersion ="36"
         android:targetSdkVersion="36" />
 
